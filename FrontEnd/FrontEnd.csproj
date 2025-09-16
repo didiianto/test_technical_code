@@ -67,16 +67,16 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Content Include="formn.aspx" />
+    <Content Include="form.aspx" />
     <Content Include="Web.config" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="formn.aspx.cs">
-      <DependentUpon>formn.aspx</DependentUpon>
+    <Compile Include="form.aspx.cs">
+      <DependentUpon>form.aspx</DependentUpon>
       <SubType>ASPXCodeBehind</SubType>
     </Compile>
-    <Compile Include="formn.aspx.designer.cs">
-      <DependentUpon>formn.aspx</DependentUpon>
+    <Compile Include="form.aspx.designer.cs">
+      <DependentUpon>form.aspx</DependentUpon>
     </Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

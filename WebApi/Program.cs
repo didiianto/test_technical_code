@@ -29,6 +29,7 @@ if (app.Environment.IsDevelopment())
 using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    context.Database.EnsureDeleted();
     context.Database.EnsureCreated();
     SeedData(context);
 }
@@ -43,28 +44,63 @@ app.UseCors("OpenCors)");
 //Get All
 app.MapGet("/api/meetingrooms", async (AppDbContext context) =>
 {
-    return await context.MeetingRooms.ToListAsync();
+    return await context.MeetingRooms.Include(r => r.bookings).ToListAsync();
 });
 
 //post
 app.MapPost("/api/meetingrooms", async (AppDbContext context, BookingDto dto) =>
 {
-    var room = await context.MeetingRooms.Include(x => x.bookings).FirstOrDefaultAsync(x => x.Id == dto.meetingRoomId);
+    if (dto.peeople < 2)
+        return Results.BadRequest("Meeting must have at least 2 participants");
 
-    if(room == null) return Results.NotFound();
-    if (dto.peeople > room.Capacity) return Results.BadRequest("Not enough capacity for that many people");
+    var selectedRoom = await context.MeetingRooms
+        .Include(r => r.bookings)
+        .FirstOrDefaultAsync(r => r.Id == dto.meetingRoomId);
+
+    if (selectedRoom == null)
+        return Results.NotFound("Meeting room not found");
+
+    if (dto.peeople > selectedRoom.Capacity)
+        return Results.BadRequest($"Room capacity is only {selectedRoom.Capacity} people");
 
     var start = dto.Start;
     var end = dto.Start.AddMinutes(dto.DurationMinutes);
 
-    bool conflict = room.bookings.Any(x => x.Start < end && x.End > start);
-    if (conflict) return Results.BadRequest("Room is already booked");
+    bool conflict = selectedRoom.bookings.Any(x => x.Start < end && x.End > start);
+    if (!conflict)
+    {
+        var booking = new Booking { Start = start, End = end, peeople = dto.peeople };
+        selectedRoom.bookings.Add(booking);
+        await context.SaveChangesAsync();
+        return Results.Created($"/api/meetingrooms/{selectedRoom.Id}", selectedRoom);
+    }
 
-    var booking = new Booking { Start = start, End = end, peeople = dto.peeople };
-    room.bookings.Add(booking);
-    await context.SaveChangesAsync();
-    return Results.Created($"/api/meetingrooms/{room.Id}", room);
+    var candidateRooms = await context.MeetingRooms
+        .Include(r => r.bookings)
+        .Where(r => r.Capacity >= dto.peeople)
+        .ToListAsync();
 
+    var suggestions = new List<object>();
+    foreach (var room in candidateRooms)
+    {
+        var nextFree = FindNextAvailableSlot(room, start, dto.DurationMinutes);
+        if (nextFree != null)
+        {
+            suggestions.Add(new
+            {
+                RoomId = room.Id,
+                RoomName = room.Name,
+                SuggestedStart = nextFree.Value,
+                SuggestedEnd = nextFree.Value.AddMinutes(dto.DurationMinutes)
+            });
+        }
+    }
+
+    return Results.BadRequest(new
+    {
+        Message = "Requested slot is not available",
+        Suggestions = suggestions
+    });
 });
 
 //app.UseHttpsRedirection();
@@ -85,22 +121,49 @@ static void SeedData(AppDbContext context)
         var roomB = new MeetingRoom { Name = "Room B", Capacity = 10 };
 
         roomA.bookings.AddRange(new List<Booking>
-
         {
             new Booking { Start = today.AddHours(7), End = today.AddHours(9), peeople = 3 },
-            new Booking { Start = today.AddHours(9).AddMinutes(45), End = today.AddHours(10).AddMinutes(35), peeople = 2 }
+            new Booking { Start = today.AddHours(9).AddMinutes(45),
+                          End   = today.AddHours(10).AddMinutes(30),
+                          peeople = 2 }
         });
 
         roomB.bookings.AddRange(new List<Booking>
         {
-            new Booking { Start = today.AddHours(7), End = today.AddHours(9), peeople = 3 },
-            new Booking { Start = today.AddHours(9).AddMinutes(45), End = today.AddHours(10).AddMinutes(35), peeople = 2 }
+            new Booking { Start = today.AddHours(7), End = today.AddHours(9), peeople = 5 },
+            new Booking { Start = today.AddHours(9).AddMinutes(45),
+                          End   = today.AddHours(10).AddMinutes(30),
+                          peeople = 4 }
         });
 
         context.MeetingRooms.AddRange(roomA, roomB);
         context.SaveChanges();
     }
 }
+
+DateTime? FindNextAvailableSlot(MeetingRoom room, DateTime desiredStart, int durationMinutes)
+{
+    var desiredEnd = desiredStart.AddMinutes(durationMinutes);
+    var bookings = room.bookings.OrderBy(b => b.Start).ToList();
+
+    DateTime pointer = desiredStart;
+
+    foreach (var b in bookings)
+    {
+        if (pointer < b.Start && pointer.AddMinutes(durationMinutes) <= b.Start)
+            return pointer;
+
+        if (pointer < b.End)
+            pointer = b.End;
+    }
+
+    var workDayEnd = desiredStart.Date.AddHours(16).AddMinutes(30);
+    if (pointer.AddMinutes(durationMinutes) <= workDayEnd)
+        return pointer;
+
+    return null;
+}
+
 
 public class MeetingRoom
 {
